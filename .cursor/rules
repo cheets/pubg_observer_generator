@@ -1,0 +1,19 @@
+# Cursor Rules Configuration
+# This file specifies rules for automatic operations in Cursor
+
+# Allow automatic deletion of TeamIcon folders without manual approval
+# These folders contain test data (images) that are frequently regenerated
+file_deletion:
+  auto_approve_patterns:
+    - "**/TeamIcon/**"
+    - "**/TeamIcon/"
+    - "**/TeamInfo.csv"
+
+# Allow deletion of image files in TeamIcon directories
+  auto_approve_extensions:
+    - ".png"
+    - ".jpg"
+    - ".jpeg"
+    - ".gif"
+    - ".bmp"
+    - ".csv"

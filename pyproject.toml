@@ -1,0 +1,35 @@
+[tool.poetry]
+name = "pubg-observer-generator"
+version = "1.0.0"
+description = "PUBG Observer Generator tool for generating team observer packages (Python 3.13+)"
+authors = ["Henri Koskenranta <henri.koskenranta@gmail.com>"]
+license = "MIT"
+readme = "README.md"
+packages = [{include = "pubg_observer_generator", from = "src"}]
+
+[tool.poetry.dependencies]
+python = "^3.13"
+Pillow = "^10.0.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.0.0"
+black = "^22.0.0"
+ruff = "^0.1.0"
+
+[tool.poetry.scripts]
+generator = "pubg_observer_generator.main:main"
+app = "pubg_observer_generator.main:main"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 88
+target-version = ['py311']
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+select = ["E", "W", "F", "I", "N", "B", "A", "C4", "UP", "SIM"]
+ignore = ["E203"]
