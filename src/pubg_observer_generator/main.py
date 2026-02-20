@@ -1,3 +1,4 @@
+import argparse
 import csv
 import os
 import re
@@ -97,41 +98,118 @@ def rgb_to_hex(rgb):
     return f"{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}FF".upper()
 
 
-def add_slot_number_to_image(image_path, slot_number, output_path=None):
-    """Add slot number to image in bottom-right corner with white text and black outline."""
+def add_slot_number_to_image(image_path, slot_number, output_path=None, output_size=None):
+    """Add slot number to image in bottom-right corner with white text and black outline.
+
+    Args:
+        image_path: Path to source image.
+        slot_number: Number to draw on the image.
+        output_path: Where to save the result. Defaults to image_path.
+        output_size: Optional (width, height) to resize the output. Useful for testing
+            at game display sizes (e.g. 22x22 for killfeed icons).
+    """
     image = Image.open(image_path)
     draw = ImageDraw.Draw(image)
 
-    # Try to load fonts in order of preference
-    font_paths = [
-        "/System/Library/Fonts/Supplemental/Arial Narrow Bold Italic.ttf",
-        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
-    ]
-
-    font = None
-    for font_path in font_paths:
-        try:
-            font = ImageFont.truetype(font_path, 300)
-            break
-        except OSError:
-            continue
-
-    if font is None:
-        font = ImageFont.load_default()
-
     text = str(slot_number)
 
-    # Calculate text position (bottom-right corner with margins)
-    bbox = draw.textbbox((0, 0), text, font=font)
-    text_width = bbox[2] - bbox[0]
-    text_height = bbox[3] - bbox[1]
-    x = image.width - text_width - 30
-    y = image.height - text_height - 80
+    # Prefer straight (non-italic) bold fonts for readability at small sizes.
+    font_paths = [
+        os.path.expanduser("~/Library/Fonts/PoppinsLatin-SemiBold.otf"),
+        os.path.expanduser("~/Library/Fonts/Poppins-SemiBold.otf"),
+        os.path.expanduser("~/Library/Fonts/PoppinsLatin-Medium.otf"),
+        os.path.expanduser("~/Library/Fonts/Poppins-Medium.otf"),
+        os.path.expanduser("~/Library/Fonts/PoppinsLatin-Regular.otf"),
+        os.path.expanduser("~/Library/Fonts/Poppins-Regular.otf"),
+        "/System/Library/Fonts/Supplemental/Arial Black.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+    ]
 
-    # Add text with black outline
-    draw.text(
-        (x, y), text, font=font, fill="white", stroke_fill="black", stroke_width=8
-    )
+    def load_font(size: int):
+        for font_path in font_paths:
+            try:
+                return ImageFont.truetype(font_path, size)
+            except OSError:
+                continue
+        return ImageFont.load_default()
+
+    # Scale font size to icon size and ensure the text fits.
+    font_size = max(12, int(image.height * 0.65))
+    font = load_font(font_size)
+
+    max_text_w = int(image.width * 0.78)
+    max_text_h = int(image.height * 0.78)
+    while True:
+        stroke_width = max(8, int(font_size * 0.08))
+        bbox = draw.textbbox((0, 0), text, font=font, stroke_width=stroke_width)
+        text_width = bbox[2] - bbox[0]
+        text_height = bbox[3] - bbox[1]
+
+        if text_width <= max_text_w and text_height <= max_text_h:
+            break
+
+        next_size = int(font_size * 0.92)
+        if next_size >= font_size or next_size < 12:
+            break
+
+        font_size = next_size
+        font = load_font(font_size)
+
+    # Calculate text position (bottom-right corner with margins)
+    stroke_width = max(8, int(font_size * 0.08))
+    # Negative padding pushes the number past the edge; slight clipping is acceptable.
+    padding_right = -20
+    padding_bottom = -3
+
+    # Draw digits individually so we can control spacing (tracking) precisely.
+    # For 2-digit numbers, make the digits almost touch.
+    tracking_px = 0
+    if len(text) == 2 and text.isdigit():
+        tracking_px = -max(1, int(font_size * 0.15))
+
+    glyph_bboxes = [
+        draw.textbbox((0, 0), ch, font=font, stroke_width=stroke_width) for ch in text
+    ]
+
+    glyph_positions = []
+    current_right = None
+    for ch, bb in zip(text, glyph_bboxes):
+        if current_right is None:
+            x0 = 0
+        else:
+            # Place next glyph so its left edge is `tracking_px` from current right edge.
+            x0 = current_right + tracking_px - bb[0]
+
+        glyph_positions.append((ch, x0, bb))
+        current_right = x0 + bb[2]
+
+    # Compute the overall bounding box of the composed glyphs.
+    left = min(x0 + bb[0] for _ch, x0, bb in glyph_positions)
+    top = min(bb[1] for _ch, _x0, bb in glyph_positions)
+    right = max(x0 + bb[2] for _ch, x0, bb in glyph_positions)
+    bottom = max(bb[3] for _ch, _x0, bb in glyph_positions)
+
+    # Translate so the composed bbox is anchored bottom-right (negative padding allows slight clip).
+    offset_x = image.width - padding_right - right
+    offset_y = image.height - padding_bottom - bottom
+
+    # Keep left/top inside the image; right/bottom may clip per user preference.
+    offset_x = max(offset_x, -left)
+    offset_y = max(offset_y, -top)
+
+    for ch, x0, _bb in glyph_positions:
+        draw.text(
+            (x0 + offset_x, offset_y),
+            ch,
+            font=font,
+            fill="white",
+            stroke_fill="black",
+            stroke_width=stroke_width,
+        )
+
+    if output_size is not None:
+        image = image.resize(output_size, Image.Resampling.LANCZOS)
 
     output_path = output_path or image_path
     image.save(output_path)
@@ -354,7 +432,7 @@ def get_team_colors(slots_file):
     return team_colors
 
 
-def prepare_team_data(observer_dir, team_colors, output_observer_dir):
+def prepare_team_data(observer_dir, team_colors, output_observer_dir, output_size=None):
     team_data = []
     used_colors = set()
 
@@ -401,7 +479,12 @@ def prepare_team_data(observer_dir, team_colors, output_observer_dir):
 
         # Create numbered image in TeamIcon directory
         numbered_image_path = os.path.join(team_icon_dir, image_file_name)
-        add_slot_number_to_image(clean_image_path, team_number, numbered_image_path)
+        add_slot_number_to_image(
+            clean_image_path,
+            team_number,
+            numbered_image_path,
+            output_size=output_size,
+        )
 
         team_data.append(
             [team_number, team_name, team_short_name, image_file_name, color_hex]
@@ -425,15 +508,39 @@ def create_zip_archive(source_dir, output_zip):
 
 
 def main():
-    if len(sys.argv) != 4:  # Check that all three parameters are provided
-        print("❌ Error: Invalid arguments")
-        print("Usage: poetry run generator <league_name> <season> <division>")
-        print("Example: poetry run generator league_name s15 div4")
+    parser = argparse.ArgumentParser(
+        description="Generate PUBG Observer team packages with numbered team icons."
+    )
+    parser.add_argument("league_name", help="League name (e.g. kanaliiga)")
+    parser.add_argument("season", help="Season identifier (e.g. s16)")
+    parser.add_argument("division", help="Division (e.g. div3 or div3-quali)")
+    parser.add_argument(
+        "-w",
+        "--width",
+        type=int,
+        default=None,
+        help="Output icon width in pixels (e.g. 22 for killfeed). If set, height must also be set.",
+    )
+    parser.add_argument(
+        "-H",
+        "--height",
+        type=int,
+        default=None,
+        help="Output icon height in pixels. Use with -w/--width to resize icons (e.g. for killfeed testing).",
+    )
+    args = parser.parse_args()
+
+    league_name = args.league_name
+    season = args.season
+    division = args.division
+
+    if (args.width is None) != (args.height is None):
+        print("❌ Error: --width and --height must be specified together")
         sys.exit(1)
 
-    league_name = sys.argv[1]
-    season = sys.argv[2]
-    division = sys.argv[3]
+    output_size = None
+    if args.width is not None:
+        output_size = (args.width, args.height)
 
     # Create an input directory path
     observer_dir = os.path.join("content", league_name, season, division)
@@ -462,7 +569,9 @@ def main():
     csv_file = os.path.join(observer_output_dir, "TeamInfo.csv")
 
     team_colors = get_team_colors(slots_file)
-    team_data = prepare_team_data(observer_dir, team_colors, observer_output_dir)
+    team_data = prepare_team_data(
+        observer_dir, team_colors, observer_output_dir, output_size=output_size
+    )
 
     # Show summary
     print("\nPrepared data for CSV:")
@@ -484,3 +593,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
